@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Attendance Tracker (Firebase)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f6f8fa; }
+    .card { padding: 16px; border-radius: 12px; background: #fff; margin-bottom: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #eee; }
+    button { padding: 6px 12px; margin: 2px; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+    button.delete { background: #e11d48; }
+  </style>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
+</head>
+<body>
+  <div class="card" id="loginCard">
+    <h2>Login</h2>
+    <input id="loginUser" placeholder="User ID">
+    <input id="loginPass" type="password" placeholder="Password">
+    <button onclick="login()">Login</button>
+  </div>
+
+  <div id="adminPanel" class="card" style="display:none">
+    <h2>Admin Dashboard</h2>
+    <h3>Add Employee</h3>
+    <input id="newUserId" placeholder="User ID">
+    <input id="newUserName" placeholder="Name">
+    <input id="newUserPass" placeholder="Password">
+    <button onclick="addUser()">Add</button>
+
+    <h3>Employee List</h3>
+    <table>
+      <thead><tr><th>User ID</th><th>Name</th><th>Password</th><th>Action</th></tr></thead>
+      <tbody id="userTable"></tbody>
+    </table>
+
+    <h3>Attendance Report</h3>
+    <input type="date" id="reportDate">
+    <button onclick="generateReport()">Generate</button>
+    <table>
+      <thead><tr><th>User ID</th><th>Name</th><th>First IN</th><th>Last OUT</th><th>Punches</th></tr></thead>
+      <tbody id="reportBody"></tbody>
+    </table>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <div id="employeePanel" class="card" style="display:none">
+    <h2>Welcome <span id="empName"></span></h2>
+    <button onclick="markPunch('IN')">Punch IN</button>
+    <button onclick="markPunch('OUT')">Punch OUT</button>
+    <h3>My Attendance</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Type</th></tr></thead>
+      <tbody id="empAttendance"></tbody>
+    </table>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+<script>
+  // ================= FIREBASE SETUP =================
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+  const app = firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  let currentUser = null;
+  let users = {};
+  let records = [];
+
+  // Load all users
+  async function loadUsers(){
+    const snap = await db.collection("users").get();
+    users = {};
+    snap.forEach(doc => users[doc.id] = doc.data());
+    renderUsers();
+  }
+
+  // Load all records
+  async function loadRecords(){
+    const snap = await db.collection("records").get();
+    records = snap.docs.map(d=>d.data());
+  }
+
+  // ================ LOGIN ==================
+  async function login(){
+    const u=document.getElementById('loginUser').value.trim();
+    const p=document.getElementById('loginPass').value;
+    await loadUsers();
+    if(users[u] && users[u].password===p){
+      currentUser={id:u, ...users[u]};
+      document.getElementById('loginCard').style.display='none';
+      if(currentUser.role==="admin"){ showAdmin(); } else { showEmployee(); }
+    }else{ alert("Invalid login!"); }
+  }
+  function logout(){
+    currentUser=null;
+    document.getElementById('loginCard').style.display='block';
+    document.getElementById('adminPanel').style.display='none';
+    document.getElementById('employeePanel').style.display='none';
+  }
+
+  // ================ ADMIN ==================
+  async function addUser(){
+    const id=document.getElementById('newUserId').value.trim();
+    const name=document.getElementById('newUserName').value.trim();
+    const pass=document.getElementById('newUserPass').value;
+    if(!id||!name||!pass) return alert("Fill all fields");
+    await db.collection("users").doc(id).set({name, password:pass, role:'employee'});
+    await loadUsers();
+  }
+  async function renderUsers(){
+    const tbody=document.getElementById('userTable'); tbody.innerHTML='';
+    Object.keys(users).forEach(uid=>{
+      if(uid==='admin') return;
+      const u=users[uid];
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${uid}</td><td>${u.name}</td><td>${u.password}</td>
+        <td><button class="delete" onclick="deleteUser('${uid}')">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  async function deleteUser(uid){
+    await db.collection("users").doc(uid).delete();
+    await loadUsers();
+  }
+  async function generateReport(){
+    await loadRecords();
+    const date=document.getElementById('reportDate').value;
+    const list=records.filter(r=>r.ts.startsWith(date));
+    const grouped={};
+    list.forEach(r=>{ if(!grouped[r.userId]) grouped[r.userId]=[]; grouped[r.userId].push(r); });
+    const tbody=document.getElementById('reportBody'); tbody.innerHTML='';
+    for(const uid in grouped){
+      const arr=grouped[uid];
+      arr.sort((a,b)=>new Date(a.ts)-new Date(b.ts));
+      const firstIn=arr.find(x=>x.type==='IN');
+      const lastOut=[...arr].reverse().find(x=>x.type==='OUT');
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${uid}</td><td>${arr[0].name}</td><td>${firstIn?new Date(firstIn.ts).toLocaleTimeString():'-'}</td>
+        <td>${lastOut?new Date(lastOut.ts).toLocaleTimeString():'-'}</td><td>${arr.length}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+  async function showAdmin(){
+    document.getElementById('adminPanel').style.display='block';
+    await loadUsers();
+    document.getElementById('reportDate').value=new Date().toISOString().split('T')[0];
+    generateReport();
+  }
+
+  // ================ EMPLOYEE ==================
+  async function markPunch(type){
+    const rec={userId:currentUser.id, name:currentUser.name, ts:new Date().toISOString(), type};
+    await db.collection("records").add(rec);
+    await loadRecords();
+    renderEmpAttendance();
+  }
+  function renderEmpAttendance(){
+    const tbody=document.getElementById('empAttendance'); tbody.innerHTML='';
+    records.filter(r=>r.userId===currentUser.id).forEach(r=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${new Date(r.ts).toLocaleTimeString()}</td><td>${r.type}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  async function showEmployee(){
+    document.getElementById('employeePanel').style.display='block';
+    document.getElementById('empName').innerText=currentUser.name;
+    await loadRecords();
+    renderEmpAttendance();
+  }
+
+  // ============ Initialize Admin User ============
+  (async ()=>{
+    const admin = await db.collection("users").doc("admin").get();
+    if(!admin.exists){
+      await db.collection("users").doc("admin").set({name:"Admin", password:"admin123", role:"admin"});
+    }
+  })();
+</script>
+</body>
+</html>
